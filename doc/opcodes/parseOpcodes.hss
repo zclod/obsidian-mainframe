@@ -1,0 +1,49 @@
+#! /usr/bin/env nix-shell
+#! nix-shell -i runghc -p 'haskellPackages.ghcWithPackages(p:[p.turtle p.aeson p.pretty])'
+
+
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+import GHC.Generics
+import Data.Aeson
+import Data.Text hiding (intersperse)
+import qualified Data.ByteString.Lazy as B
+import Data.ByteString.Lazy (ByteString)
+import Data.List (intersperse)
+import Data.Map
+import Turtle
+import Data.Maybe (fromJust)
+import qualified Text.PrettyPrint as P
+
+data Code = C {mnemonic :: Text, length :: Int, cycles :: [Int], operand1 :: Maybe Text, operand2 :: Maybe Text, addr :: Text} deriving (Generic, Show)
+instance FromJSON Code
+
+mytext = P.text . unpack
+
+printCode (C mnem len cyc op1 op2 raw) = mytext raw <> 
+                                         mytext " -> " <> 
+                                         mytext "(" <> 
+                                         mytext mnem <> mytext ", " <>
+                                         renderOPS op1 op2 <> mytext ", " <>
+                                         rendercyc cyc <> mytext ", " <>
+                                         P.int len <>
+                                         mytext ")"
+                                            where
+                                                renderOPS Nothing Nothing = mytext "Unit"
+                                                renderOPS (Just o) Nothing = mytext "UnOp " <> (mytext . toUpper) o
+                                                renderOPS (Just o1) (Just o2) = mytext "BinOp " <>  (mytext . toUpper) o1 <> mytext " " <> (mytext . toUpper) o2
+
+                                                rendercyc [] = P.empty
+                                                rendercyc xs = mytext "[" <> (P.hsep $ intersperse (mytext ",") (fmap P.int xs)) <> mytext "]"
+
+type FileOP = Map Text (Map Text Code)
+main = do
+    inp <- B.readFile "opcodes.json"
+    let decoded = decode inp :: Maybe FileOP
+    let noprfx = (fromJust decoded) ! "unprefixed"
+    let prfx = (fromJust decoded) ! "cbprefixed"
+
+    -- print $ (fmap . fmap . fmap) (P.render . printCode) decoded
+    --print $ fmap (P.render . printCode) prfx
+    mapM_ print $ fmap (P.render . printCode) prfx

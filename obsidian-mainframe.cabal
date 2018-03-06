@@ -24,6 +24,7 @@ executable obsidian-mainframe
 
 library
   exposed-modules:     GameBoy.Opcodes
+                       GameBoy.CPU
   hs-source-dirs:      src
 
   build-depends:       base < 5,
