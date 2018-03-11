@@ -1,4 +1,4 @@
-module GameBoy.Opcodes (
+module GameBoy.Opcode (
       Register (..)
     , Flag (..)
     , Operand (..)

@@ -3,7 +3,7 @@ let config = {
         haskellPackages = pkgs.haskellPackages.override {
             overrides = self: super: rec {
 
-                obsidian-mainframe = self.callPackage ./default.nix {};
+                obsidian-mainframe = self.callCabal2nix "obsidian-mainframe" ./obsidian-mainframe.cabal {};
 
             };
         };
