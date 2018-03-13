@@ -4,11 +4,19 @@ module GameBoy.CPU where
 
 import           Protolude
 import           Data.List ((!!))
+import           Foreign.Marshal.Utils (fromBool)
 import           Control.Monad.Cont
+import           Control.Arrow ((&&&))
 import           Data.Bits
 
-import           GameBoy.Opcode (Flag(..))
+-- import           GameBoy.Opcode (Flag(..))
 import           Control.Lens.TH (makeLenses)
+
+data Flag
+    = Z -- zero
+    | N -- subtract
+    | H -- half carry
+    | C -- carry
 
 data CPU = CPU
     { _a :: Word8
@@ -52,6 +60,7 @@ fullAdder = full halfAdder
 fullSubtractor = full halfSubtractor
 
 -- chain a series of fullAdder or fullSubtractor
+-- TODO parametrizzare lo zero
 chain :: (Bool -> Bool -> Bool -> (Bool,Bool)) -> [Bool] -> [Bool] -> [(Bool, Bool)]
 chain basicOp w1 w2 = scanr f z xs
     where
@@ -66,27 +75,68 @@ unpackBits word = go word (finiteBitSize word)
         go w n = testBit w (n - 1) : go w (n - 1)
 
 testCarryBitNumber :: FiniteBits a => (Bool -> Bool -> Bool -> (Bool,Bool)) -> Int -> a -> a -> Bool
-testCarryBitNumber op n w1 w2 = snd $ (chain op (unpackBits w1) (unpackBits w2)) !! (finiteBitSize w1 - n)
+testCarryBitNumber op n w1 w2 = snd $ (chain op (unpackBits w1) (unpackBits w2)) !! (finiteBitSize w1 - n - 1)
 ----------------------------------------------------------
 {-
 
 :l GameBoy.CPU
+:r
 chain fullSubtractor [True, True, False, False] [True, False, True, True]
 chain fullAdder [False, False, True, False] [True, False, True, True]
 
-a = 15 :: Word8
-b = 1 :: Word8
-chain fullAdder (unpackBits a) (unpackBits b)
-addcarry = testCarryBitNumber fullAdder
-addcarry 4 a b
+a = 0xe1 :: Word8
+b = 0x0f :: Word8
+c = 0x1e :: Word8
+f = 0 & set C
 
+adc8 f a c
+testFlag H 128
 -}
 
-decodeFlag :: Flag -> Word8
-decodeFlag Zf = bit 7
-decodeFlag Nf = bit 6
-decodeFlag Hf = bit 5
-decodeFlag Cf = bit 4
+flagNum :: Num a => Flag -> a
+flagNum Z = 7
+flagNum N = 6
+flagNum H = 5
+flagNum C = 4
+
+testFlag :: Flag -> Word8 -> Bool
+testFlag = flip testBit . flagNum
+
+set :: Flag -> Word8 -> Word8
+set f = flip setBit $ flagNum f
+
+reset :: Flag -> Word8 -> Word8
+reset f = flip clearBit $ flagNum f
+
+setIf :: Flag -> Bool -> Word8 -> Word8
+setIf f p = if p then set f else reset f
+
+add8carry :: Word8 -> Word8 -> Bool
+add8carry = testCarryBitNumber fullAdder 7
+
+add8halfcarry :: Word8 -> Word8 -> Bool
+add8halfcarry = testCarryBitNumber fullAdder 3
+
+add8 :: Word8 -> Word8 -> (Word8, Word8)
+add8 w1 w2 = (result, flags)
+    where
+        result = w1 + w2
+        flags = 0 & reset N
+                  & setIf Z (result == 0)
+                  & setIf C (add8carry w1 w2)
+                  & setIf H (add8halfcarry w1 w2)
+
+-- TODO da controllare
+adc8 :: Word8 -> Word8 -> Word8 -> (Word8, Word8)
+adc8 flags w1 w2 = (result, flags')
+    where
+        result = w1 + w2 + (fromBool (testFlag C flags))
+        flags' = 0 & reset N
+                   & setIf Z (result == 0)
+                   & setIf C (add8carry w1 w2)
+                   & setIf H (add8halfcarry w1 w2)
+
+-- sub8 :: Word8 -> Word8 -> (Word8, Word8)
 
 -- decodeRegister A  = a
 -- decodeRegister F  = f
