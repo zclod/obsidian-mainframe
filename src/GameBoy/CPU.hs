@@ -3,6 +3,7 @@
 module GameBoy.CPU where
 
 import           Protolude
+import           Data.List ((!!))
 import           Control.Monad.Cont
 import           Data.Bits
 
@@ -25,10 +26,8 @@ data CPU = CPU
 
 makeLenses ''CPU
 
-type ArithOp a = a -> a -> a
-type Arith8 = ArithOp Word8
-type Arith16 = ArithOp Word16
-
+-------------------------------------------------------
+-- carry flags utils
 halfAdder :: Bool -> Bool -> (Bool, Bool)
 halfAdder a b = (out, carry)
     where
@@ -52,9 +51,36 @@ fullAdder = full halfAdder
 
 fullSubtractor = full halfSubtractor
 
-chain :: (Bool -> Bool -> Bool -> (Bool, Bool)) -> [Bool] -> [Bool]
-chain adder bits = scanl f 0 bits
-    where f c a b = snd $ adder a b c
+-- chain a series of fullAdder or fullSubtractor
+chain :: (Bool -> Bool -> Bool -> (Bool,Bool)) -> [Bool] -> [Bool] -> [(Bool, Bool)]
+chain basicOp w1 w2 = scanr f z xs
+    where
+        f (a, b) (res, carry) = basicOp a b carry
+        z = (False, False)
+        xs = zip w1 w2
+
+unpackBits :: FiniteBits a => a -> [Bool]
+unpackBits word = go word (finiteBitSize word)
+    where
+        go w 0 = []
+        go w n = testBit w (n - 1) : go w (n - 1)
+
+testCarryBitNumber :: FiniteBits a => (Bool -> Bool -> Bool -> (Bool,Bool)) -> Int -> a -> a -> Bool
+testCarryBitNumber op n w1 w2 = snd $ (chain op (unpackBits w1) (unpackBits w2)) !! (finiteBitSize w1 - n)
+----------------------------------------------------------
+{-
+
+:l GameBoy.CPU
+chain fullSubtractor [True, True, False, False] [True, False, True, True]
+chain fullAdder [False, False, True, False] [True, False, True, True]
+
+a = 15 :: Word8
+b = 1 :: Word8
+chain fullAdder (unpackBits a) (unpackBits b)
+addcarry = testCarryBitNumber fullAdder
+addcarry 4 a b
+
+-}
 
 decodeFlag :: Flag -> Word8
 decodeFlag Zf = bit 7
