@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module GameBoy.CPU where
 
@@ -18,9 +19,13 @@ data Flag
     | H -- half carry
     | C -- carry
 
+newtype FlagRegistry = F {unReg :: Word8} deriving (Eq, Show, Num, Bits, FiniteBits)
+
+data Result a = Result {_res :: a, _flags :: FlagRegistry} deriving (Eq, Show)
+
 data CPU = CPU
     { _a :: Word8
-    , _f :: Word8
+    , _f :: FlagRegistry
     , _b :: Word8
     , _c :: Word8
     , _d :: Word8
@@ -60,12 +65,10 @@ fullAdder = full halfAdder
 fullSubtractor = full halfSubtractor
 
 -- chain a series of fullAdder or fullSubtractor
--- TODO parametrizzare lo zero
-chain :: (Bool -> Bool -> Bool -> (Bool,Bool)) -> [Bool] -> [Bool] -> [(Bool, Bool)]
-chain basicOp w1 w2 = scanr f z xs
+chain :: (Bool -> Bool -> Bool -> (Bool,Bool)) -> Bool -> [Bool] -> [Bool] -> [(Bool, Bool)]
+chain basicOp z w1 w2 = scanr f (False, z) xs
     where
         f (a, b) (res, carry) = basicOp a b carry
-        z = (False, False)
         xs = zip w1 w2
 
 unpackBits :: FiniteBits a => a -> [Bool]
@@ -74,24 +77,8 @@ unpackBits word = go word (finiteBitSize word)
         go w 0 = []
         go w n = testBit w (n - 1) : go w (n - 1)
 
-testCarryBitNumber :: FiniteBits a => (Bool -> Bool -> Bool -> (Bool,Bool)) -> Int -> a -> a -> Bool
-testCarryBitNumber op n w1 w2 = snd $ (chain op (unpackBits w1) (unpackBits w2)) !! (finiteBitSize w1 - n - 1)
-----------------------------------------------------------
-{-
-
-:l GameBoy.CPU
-:r
-chain fullSubtractor [True, True, False, False] [True, False, True, True]
-chain fullAdder [False, False, True, False] [True, False, True, True]
-
-a = 0xe1 :: Word8
-b = 0x0f :: Word8
-c = 0x1e :: Word8
-f = 0 & set C
-
-adc8 f a c
-testFlag H 128
--}
+testCarryBitNumber :: FiniteBits a => (Bool -> Bool -> Bool -> (Bool,Bool)) -> Int -> Bool -> a -> a -> Bool
+testCarryBitNumber op n z w1 w2 = snd $ (chain op z (unpackBits w1) (unpackBits w2)) !! (finiteBitSize w1 - n - 1)
 
 flagNum :: Num a => Flag -> a
 flagNum Z = 7
@@ -99,43 +86,114 @@ flagNum N = 6
 flagNum H = 5
 flagNum C = 4
 
-testFlag :: Flag -> Word8 -> Bool
+testFlag :: Flag -> FlagRegistry -> Bool
 testFlag = flip testBit . flagNum
 
-set :: Flag -> Word8 -> Word8
+set :: Flag -> FlagRegistry -> FlagRegistry
 set f = flip setBit $ flagNum f
 
-reset :: Flag -> Word8 -> Word8
+reset :: Flag -> FlagRegistry -> FlagRegistry
 reset f = flip clearBit $ flagNum f
 
-setIf :: Flag -> Bool -> Word8 -> Word8
+setIf :: Flag -> Bool -> FlagRegistry -> FlagRegistry
 setIf f p = if p then set f else reset f
 
-add8carry :: Word8 -> Word8 -> Bool
-add8carry = testCarryBitNumber fullAdder 7
-
-add8halfcarry :: Word8 -> Word8 -> Bool
-add8halfcarry = testCarryBitNumber fullAdder 3
-
-add8 :: Word8 -> Word8 -> (Word8, Word8)
-add8 w1 w2 = (result, flags)
-    where
-        result = w1 + w2
-        flags = 0 & reset N
-                  & setIf Z (result == 0)
-                  & setIf C (add8carry w1 w2)
-                  & setIf H (add8halfcarry w1 w2)
-
--- TODO da controllare
-adc8 :: Word8 -> Word8 -> Word8 -> (Word8, Word8)
-adc8 flags w1 w2 = (result, flags')
+----------------------------------------------------------
+--istruction implementation
+--
+-- add w1 w2 and carry flag
+adc8 :: FlagRegistry -> Word8 -> Word8 -> Result Word8
+adc8 flags w1 w2 = Result result flags'
     where
         result = w1 + w2 + (fromBool (testFlag C flags))
-        flags' = 0 & reset N
-                   & setIf Z (result == 0)
-                   & setIf C (add8carry w1 w2)
-                   & setIf H (add8halfcarry w1 w2)
+        flags' = F 0 & reset N
+                     & setIf Z (result == 0)
+                     & setIf C (add8carry (testFlag C flags) w1 w2)
+                     & setIf H (add8halfcarry (testFlag C flags) w1 w2)
 
+        add8carry :: Bool -> Word8 -> Word8 -> Bool
+        add8carry = testCarryBitNumber fullAdder 7
+        add8halfcarry :: Bool -> Word8 -> Word8 -> Bool
+        add8halfcarry = testCarryBitNumber fullAdder 3
+
+--add w1 w2
+add8 :: Word8 -> Word8 -> Result Word8
+add8 = adc8 0
+
+-- attenzione non deve toccare il carry
+inc8 :: FlagRegistry -> Word8 -> Result Word8
+inc8 flags = (\(Result r f) -> Result r (setIf C (testFlag C flags) f)) . (add8 1)
+
+sbc8 :: FlagRegistry -> Word8 -> Word8 -> Result Word8
+sbc8 flags w1 w2 = Result result flags'
+    where
+        result = w1 - w2 - (fromBool (testFlag C flags))
+        flags' = 0 & set N
+                   & setIf Z (result == 0)
+                   & setIf C (sub8carry (testFlag C flags) w1 w2)
+                   & setIf H (sub8halfcarry (testFlag C flags) w1 w2)
+
+        sub8carry :: Bool -> Word8 -> Word8 -> Bool
+        sub8carry = testCarryBitNumber fullSubtractor 7
+        sub8halfcarry :: Bool -> Word8 -> Word8 -> Bool
+        sub8halfcarry = testCarryBitNumber fullSubtractor 3
+
+sub8 :: Word8 -> Word8 -> Result Word8
+sub8 = sbc8 0
+
+-- attenzione non deve toccare il carry
+dec8 :: FlagRegistry -> Word8 -> Result Word8
+dec8 flags = (\(Result r f) -> Result r (setIf C (testFlag C flags) f)) . (flip sub8 1)
+
+and8 :: Word8 -> Word8 -> Result Word8
+and8 w1 w2 = Result result flags
+    where
+        result = w1 .&. w2
+        flags = F 0 & setIf Z (result == 0)
+                    & set H
+                    & reset C
+                    & reset N
+
+or8 :: Word8 -> Word8 -> Result Word8
+or8 w1 w2 = Result result flags
+    where
+        result = w1 .|. w2
+        flags = F 0 & setIf Z (result == 0)
+                    & reset H
+                    & reset C
+                    & reset N
+
+xor8 :: Word8 -> Word8 -> Result Word8
+xor8 w1 w2 = Result result flags
+    where
+        result = w1 `xor` w2
+        flags = F 0 & setIf Z (result == 0)
+                    & reset H
+                    & reset C
+                    & reset N
+
+cp8 :: Word8 -> Word8 -> FlagRegistry
+cp8 w1 w2 = _flags (sub8 w1 w2)
+{-
+
+:l GameBoy.CPU
+:r
+chain fullSubtractor [True, True, False, False] [True, False, True, True]
+chain fullAdder [False, False, True, False] [True, False, True, True]
+
+a = 0x3b :: Word8
+b = 0x4f :: Word8
+c = 0x2a :: Word8
+d = 0x3a :: Word8
+f = F 0 & set C
+
+sbc8 f a b
+inc8 0 0xff
+testFlag Z $ F 112
+testFlag C $ F 112
+testFlag N $ F 112
+testFlag H $ F 112
+-}
 -- sub8 :: Word8 -> Word8 -> (Word8, Word8)
 
 -- decodeRegister A  = a
