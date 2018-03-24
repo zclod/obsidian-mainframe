@@ -4,6 +4,9 @@
 module GameBoy.CPU where
 
 import           Protolude
+import           Data.Sequence (fromList)
+import           Control.Lens (ix, preview, Lens')
+import           Control.Lens.Operators
 import           Data.List ((!!))
 import           Foreign.Marshal.Utils (fromBool)
 import           Control.Monad.Cont
@@ -20,8 +23,10 @@ data Flag
     | C -- carry
 
 newtype FlagRegistry = F {unReg :: Word8} deriving (Eq, Show, Num, Bits, FiniteBits)
+newtype Address = A {unAddress :: Word16} deriving (Eq, Show, Num, Bits, FiniteBits)
 
 data Result a = Result {_res :: a, _flags :: FlagRegistry} deriving (Eq, Show)
+makeLenses ''Result
 
 data CPU = CPU
     { _a :: Word8
@@ -35,8 +40,7 @@ data CPU = CPU
     , _pc :: Word16
     , _sp :: Word16
     , _ram :: Seq Word8
-    }
-
+    } deriving (Show)
 makeLenses ''CPU
 
 -------------------------------------------------------
@@ -172,12 +176,28 @@ xor8 w1 w2 = Result result flags
                     & reset C
                     & reset N
 
-cp8 :: Word8 -> Word8 -> FlagRegistry
-cp8 w1 w2 = _flags (sub8 w1 w2)
-{-
+cp8 :: Word8 -> Word8 -> Result ()
+cp8 w1 w2 = Result () (_flags (sub8 w1 w2))
 
+-- load instruction, can fail if src or dst lens fails
+ld dst src cpu = cpu & dst %%~ const (cpu^?src)
+
+memo l = 
+{-
+:set -XRankNTypes
 :l GameBoy.CPU
 :r
+:t ld
+defcpu = CPU 0 (F 0) 1 0 0 0 0 0 0 0 (fromList [0,1,2,3,4])
+ld a (ram . ix 4) defcpu
+ld a (ram . ix . a) defcpu
+ld b a defcpu
+
+defcpu ^? ram . (ix 2)
+preview a defcpu
+:t preview a
+defcpu ^? a
+
 chain fullSubtractor [True, True, False, False] [True, False, True, True]
 chain fullAdder [False, False, True, False] [True, False, True, True]
 
