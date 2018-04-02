@@ -29,6 +29,7 @@ library
                      , mtl
                      , lens
                      , protolude
+                     , containers
 
 
   default-extensions:  NoImplicitPrelude

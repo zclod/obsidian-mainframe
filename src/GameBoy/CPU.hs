@@ -1,11 +1,12 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module GameBoy.CPU where
 
-import           Protolude
-import           Data.Sequence (fromList)
-import           Control.Lens (ix, preview, Lens')
+import           Protolude hiding ((<&>))
+import qualified Data.Sequence as Seq
+import           Control.Lens (use, ix, preview, Lens', Index, IxValue, Ixed)
 import           Control.Lens.Operators
 import           Data.List ((!!))
 import           Foreign.Marshal.Utils (fromBool)
@@ -25,6 +26,24 @@ data Flag
 newtype FlagRegistry = F {unReg :: Word8} deriving (Eq, Show, Num, Bits, FiniteBits)
 newtype Address = A {unAddress :: Word16} deriving (Eq, Show, Num, Bits, FiniteBits)
 
+newtype Memory = Memory {unMemory :: Seq Word8} deriving (Eq, Show)
+
+type instance Index Memory = Word16
+
+type instance IxValue Memory = Word8
+
+instance Ixed Memory where
+  ix i f m
+    | 0 <= i && w16tInt i < Seq.length (unMemory m) =
+        f (Seq.index (unMemory m) (w16tInt i)) <&> \a -> Memory $ Seq.update (w16tInt i) a (unMemory m)
+    | otherwise                  = pure m
+
+        where
+            w16tInt :: Word16 -> Int
+            w16tInt =  fromInteger . toInteger
+  {-# INLINE ix #-}
+
+
 data Result a = Result {_res :: a, _flags :: FlagRegistry} deriving (Eq, Show)
 makeLenses ''Result
 
@@ -39,7 +58,7 @@ data CPU = CPU
     , _l :: Word8
     , _pc :: Word16
     , _sp :: Word16
-    , _ram :: Seq Word8
+    , _ram :: Memory
     } deriving (Show)
 makeLenses ''CPU
 
@@ -182,22 +201,41 @@ cp8 w1 w2 = Result () (_flags (sub8 w1 w2))
 -- load instruction, can fail if src or dst lens fails
 ld dst src cpu = cpu & dst %%~ const (cpu^?src)
 
-memo l = 
+-- memo l = ram . ix i
+--     where
+--         i = l
+
+-- ld' dst l = execState $ do
+--     x <- use l
+--     dst .= ram . ix (fromInteger x)
 {-
 :set -XRankNTypes
-:l GameBoy.CPU
-:r
-:t ld
-defcpu = CPU 0 (F 0) 1 0 0 0 0 0 0 0 (fromList [0,1,2,3,4])
-ld a (ram . ix 4) defcpu
-ld a (ram . ix . a) defcpu
-ld b a defcpu
+:set -XGADTs
+:set -XFlexibleContexts
 
-defcpu ^? ram . (ix 2)
+:l GameBoy.CPU
+:m + GameBoy.CPU
+:m + Control.Lens
+:m + Data.Sequence
+:m - Protolude
+import Protolude (const)
+:r
+
+:t ld
+:t memo
+defcpu = CPU 0 (F 0) 1 0 0 0 0 0 0 0 (Memory $ Seq.fromList [0,1,2,3,4])
+defcpu ^? ram . ix 2
+ld a (ram . ix 4) defcpu
+ld b a defcpu
+ld' a b defcpu
+
+
+defcpu ^? to (const 5)
+("hello","world")^.to snd
+x (to $ const 5) defcpu
 preview a defcpu
 :t preview a
 defcpu ^? a
-
 chain fullSubtractor [True, True, False, False] [True, False, True, True]
 chain fullAdder [False, False, True, False] [True, False, True, True]
 
@@ -214,7 +252,6 @@ testFlag C $ F 112
 testFlag N $ F 112
 testFlag H $ F 112
 -}
--- sub8 :: Word8 -> Word8 -> (Word8, Word8)
 
 -- decodeRegister A  = a
 -- decodeRegister F  = f
