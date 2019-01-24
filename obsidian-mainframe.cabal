@@ -17,14 +17,9 @@ cabal-version:       >=1.10
 
 executable obsidian-mainframe
   main-is:             Main.hs
-  build-depends:       base < 5,
-                       obsidian-mainframe
-  hs-source-dirs:      app
-  default-language:    Haskell2010
-
-library
   hs-source-dirs:      src
-  exposed-modules:     GameBoy, GameBoy.CPU, GameBoy.Opcode
+  other-modules:       GameBoy.Opcode, GameBoy.CPU
+
   build-depends:       base < 5
                      , mtl
                      , lens

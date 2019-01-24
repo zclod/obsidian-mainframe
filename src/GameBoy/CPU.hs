@@ -1,30 +1,35 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
 
 module GameBoy.CPU where
 
 import           Protolude hiding ((<&>))
+import           GHC.Generics
+
 import qualified Data.Sequence as Seq
-import           Control.Lens (use, ix, preview, Lens', Index, IxValue, Ixed)
-import           Control.Lens.Operators
+import           Data.Bits
 import           Data.List ((!!))
 import           Foreign.Marshal.Utils (fromBool)
+
 import           Control.Monad.Cont
+import           Control.Monad.State
 import           Control.Arrow ((&&&))
-import           Data.Bits
 
--- import           GameBoy.Opcode (Flag(..))
+import           Control.Lens (use, ix, preview, Lens', Index, IxValue, Ixed)
+import           Control.Lens.Operators
 import           Control.Lens.TH (makeLenses)
+import           Control.Lens.Wrapped
 
-data Flag
-    = Z -- zero
-    | N -- subtract
-    | H -- half carry
-    | C -- carry
+import           GameBoy.Opcode --(Flag(..))
 
-newtype FlagRegistry = F {unReg :: Word8} deriving (Eq, Show, Num, Bits, FiniteBits)
-newtype Address = A {unAddress :: Word16} deriving (Eq, Show, Num, Bits, FiniteBits)
+newtype FlagRegistry = FR {unReg :: Word8} deriving (Eq, Show, Num, Bits, FiniteBits, Generic)
+instance Wrapped FlagRegistry
+
+newtype Address = Adr {unAddress :: Word16} deriving (Eq, Show, Num, Bits, FiniteBits, Generic)
 
 newtype Memory = Memory {unMemory :: Seq Word8} deriving (Eq, Show)
 
@@ -40,12 +45,13 @@ instance Ixed Memory where
 
         where
             w16tInt :: Word16 -> Int
-            w16tInt =  fromInteger . toInteger
+            -- w16tInt =  fromInteger . toInteger
+            w16tInt =  fromIntegral
   {-# INLINE ix #-}
 
 
-data Result a = Result {_res :: a, _flags :: FlagRegistry} deriving (Eq, Show)
-makeLenses ''Result
+data ALU a = Result {_res :: a, _flags :: FlagRegistry} deriving (Eq, Show)
+makeLenses ''ALU
 
 data CPU = CPU
     { _a :: Word8
@@ -61,6 +67,8 @@ data CPU = CPU
     , _ram :: Memory
     } deriving (Show)
 makeLenses ''CPU
+
+type Instruction a = State CPU a
 
 -------------------------------------------------------
 -- carry flags utils
@@ -104,10 +112,10 @@ testCarryBitNumber :: FiniteBits a => (Bool -> Bool -> Bool -> (Bool,Bool)) -> I
 testCarryBitNumber op n z w1 w2 = snd $ (chain op z (unpackBits w1) (unpackBits w2)) !! (finiteBitSize w1 - n - 1)
 
 flagNum :: Num a => Flag -> a
-flagNum Z = 7
-flagNum N = 6
-flagNum H = 5
-flagNum C = 4
+flagNum Zf = 7
+flagNum Nf = 6
+flagNum Hf = 5
+flagNum Cf = 4
 
 testFlag :: Flag -> FlagRegistry -> Bool
 testFlag = flip testBit . flagNum
@@ -122,17 +130,17 @@ setIf :: Flag -> Bool -> FlagRegistry -> FlagRegistry
 setIf f p = if p then set f else reset f
 
 ----------------------------------------------------------
---istruction implementation
+--ALU operations
 --
 -- add w1 w2 and carry flag
-adc8 :: FlagRegistry -> Word8 -> Word8 -> Result Word8
+adc8 :: FlagRegistry -> Word8 -> Word8 -> ALU Word8
 adc8 flags w1 w2 = Result result flags'
     where
-        result = w1 + w2 + (fromBool (testFlag C flags))
-        flags' = F 0 & reset N
-                     & setIf Z (result == 0)
-                     & setIf C (add8carry (testFlag C flags) w1 w2)
-                     & setIf H (add8halfcarry (testFlag C flags) w1 w2)
+        result = w1 + w2 + (fromBool (testFlag Cf flags))
+        flags' = FR 0 & reset Nf
+                     & setIf Zf (result == 0)
+                     & setIf Cf (add8carry (testFlag Cf flags) w1 w2)
+                     & setIf Hf (add8halfcarry (testFlag Cf flags) w1 w2)
 
         add8carry :: Bool -> Word8 -> Word8 -> Bool
         add8carry = testCarryBitNumber fullAdder 7
@@ -140,66 +148,87 @@ adc8 flags w1 w2 = Result result flags'
         add8halfcarry = testCarryBitNumber fullAdder 3
 
 --add w1 w2
-add8 :: Word8 -> Word8 -> Result Word8
+add8 :: Word8 -> Word8 -> ALU Word8
 add8 = adc8 0
 
 -- attenzione non deve toccare il carry
-inc8 :: FlagRegistry -> Word8 -> Result Word8
-inc8 flags = (\(Result r f) -> Result r (setIf C (testFlag C flags) f)) . (add8 1)
+inc8 :: FlagRegistry -> Word8 -> ALU Word8
+inc8 flags = (\(Result r f) -> Result r (setIf Cf (testFlag Cf flags) f)) . (add8 1)
 
-sbc8 :: FlagRegistry -> Word8 -> Word8 -> Result Word8
+sbc8 :: FlagRegistry -> Word8 -> Word8 -> ALU Word8
 sbc8 flags w1 w2 = Result result flags'
     where
-        result = w1 - w2 - (fromBool (testFlag C flags))
-        flags' = 0 & set N
-                   & setIf Z (result == 0)
-                   & setIf C (sub8carry (testFlag C flags) w1 w2)
-                   & setIf H (sub8halfcarry (testFlag C flags) w1 w2)
+        result = w1 - w2 - (fromBool (testFlag Cf flags))
+        flags' = 0 & set Nf
+                   & setIf Zf (result == 0)
+                   & setIf Cf (sub8carry (testFlag Cf flags) w1 w2)
+                   & setIf Hf (sub8halfcarry (testFlag Cf flags) w1 w2)
 
         sub8carry :: Bool -> Word8 -> Word8 -> Bool
         sub8carry = testCarryBitNumber fullSubtractor 7
         sub8halfcarry :: Bool -> Word8 -> Word8 -> Bool
         sub8halfcarry = testCarryBitNumber fullSubtractor 3
 
-sub8 :: Word8 -> Word8 -> Result Word8
+sub8 :: Word8 -> Word8 -> ALU Word8
 sub8 = sbc8 0
 
 -- attenzione non deve toccare il carry
-dec8 :: FlagRegistry -> Word8 -> Result Word8
-dec8 flags = (\(Result r f) -> Result r (setIf C (testFlag C flags) f)) . (flip sub8 1)
+dec8 :: FlagRegistry -> Word8 -> ALU Word8
+dec8 flags = (\(Result r f) -> Result r (setIf Cf (testFlag Cf flags) f)) . (flip sub8 1)
 
-and8 :: Word8 -> Word8 -> Result Word8
+and8 :: Word8 -> Word8 -> ALU Word8
 and8 w1 w2 = Result result flags
     where
         result = w1 .&. w2
-        flags = F 0 & setIf Z (result == 0)
-                    & set H
-                    & reset C
-                    & reset N
+        flags = FR 0 & setIf Zf (result == 0)
+                    & set Hf
+                    & reset Cf
+                    & reset Nf
 
-or8 :: Word8 -> Word8 -> Result Word8
+or8 :: Word8 -> Word8 -> ALU Word8
 or8 w1 w2 = Result result flags
     where
         result = w1 .|. w2
-        flags = F 0 & setIf Z (result == 0)
-                    & reset H
-                    & reset C
-                    & reset N
+        flags = FR 0 & setIf Zf (result == 0)
+                    & reset Hf
+                    & reset Cf
+                    & reset Nf
 
-xor8 :: Word8 -> Word8 -> Result Word8
+xor8 :: Word8 -> Word8 -> ALU Word8
 xor8 w1 w2 = Result result flags
     where
         result = w1 `xor` w2
-        flags = F 0 & setIf Z (result == 0)
-                    & reset H
-                    & reset C
-                    & reset N
+        flags = FR 0 & setIf Zf (result == 0)
+                    & reset Hf
+                    & reset Cf
+                    & reset Nf
 
-cp8 :: Word8 -> Word8 -> Result ()
+cp8 :: Word8 -> Word8 -> ALU ()
 cp8 w1 w2 = Result () (_flags (sub8 w1 w2))
 
--- load instruction, can fail if src or dst lens fails
-ld dst src cpu = cpu & dst %%~ const (cpu^?src)
+----------------------------------------------------------------------------
+
+--utilities
+decodeRegister8 :: Register8 -> Lens' CPU Word8
+decodeRegister8 A = a
+decodeRegister8 B = b
+decodeRegister8 C = c
+decodeRegister8 D = d
+decodeRegister8 E = e
+decodeRegister8 F = f . _Wrapped'
+decodeRegister8 H = h
+decodeRegister8 L = l
+
+decodeRegister16 :: Register16 -> Lens' CPU Word16
+decodeRegister16 = undefined
+
+-- instructions
+--
+nop :: Instruction ()
+nop = pure ()
+
+ld :: Operand -> Operand -> Instruction ()
+ld _ _ = nop
 
 -- memo l = ram . ix i
 --     where
@@ -223,7 +252,9 @@ import Protolude (const)
 
 :t ld
 :t memo
-defcpu = CPU 0 (F 0) 1 0 0 0 0 0 0 0 (Memory $ Seq.fromList [0,1,2,3,4])
+defcpu = CPU 0 (FR 0) 1 0 0 0 0 0 0 0 (Memory $ Seq.fromList [0,1,2,3,4])
+set (decodeRegister C) $ 1 $ defcpu
+set c 2 defcpu
 defcpu ^? ram . ix 2
 ld a (ram . ix 4) defcpu
 ld b a defcpu
@@ -243,23 +274,12 @@ a = 0x3b :: Word8
 b = 0x4f :: Word8
 c = 0x2a :: Word8
 d = 0x3a :: Word8
-f = F 0 & set C
+f = FR 0 & set C
 
 sbc8 f a b
 inc8 0 0xff
-testFlag Z $ F 112
-testFlag C $ F 112
-testFlag N $ F 112
-testFlag H $ F 112
+testFlag Z $ FR 112
+testFlag C $ FR 112
+testFlag N $ FR 112
+testFlag H $ FR 112
 -}
-
--- decodeRegister A  = a
--- decodeRegister F  = f
--- decodeRegister B  = b
--- decodeRegister C  = c
--- decodeRegister D  = d
--- decodeRegister E  = e
--- decodeRegister H  = h
--- decodeRegister L  = l
--- decodeRegister PC = pc
--- decodeRegister SP = sp
