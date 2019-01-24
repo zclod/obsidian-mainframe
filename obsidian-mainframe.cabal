@@ -18,7 +18,7 @@ cabal-version:       >=1.10
 executable obsidian-mainframe
   main-is:             Main.hs
   hs-source-dirs:      src
-  other-modules:       GameBoy.Opcode, GameBoy.CPU
+  other-modules:       GameBoy.CPU, GameBoy.ALU, GameBoy.Opcode, GameBoy.Memory
 
   build-depends:       base < 5
                      , mtl
