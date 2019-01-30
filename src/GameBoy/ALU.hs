@@ -17,10 +17,10 @@ import           Control.Lens.Wrapped
 import           GameBoy.Opcode (Flag(..))
 
 
-newtype FlagRegistry = FR {unReg :: Word8} deriving (Eq, Show, Num, Bits, FiniteBits, Generic)
-instance Wrapped FlagRegistry
+newtype FlagRegister = FR {unReg :: Word8} deriving (Eq, Show, Num, Bits, FiniteBits, Generic)
+instance Wrapped FlagRegister
 
-data ALU a = Result {_res :: a, _flags :: FlagRegistry} deriving (Eq, Show)
+data ALU a = Result {_res :: a, _flags :: FlagRegister} deriving (Eq, Show)
 makeLenses ''ALU
 
 -------------------------------------------------------
@@ -70,23 +70,23 @@ flagNum Nf = 6
 flagNum Hf = 5
 flagNum Cf = 4
 
-testFlag :: Flag -> FlagRegistry -> Bool
+testFlag :: Flag -> FlagRegister -> Bool
 testFlag = flip testBit . flagNum
 
-set :: Flag -> FlagRegistry -> FlagRegistry
+set :: Flag -> FlagRegister -> FlagRegister
 set f = flip setBit $ flagNum f
 
-reset :: Flag -> FlagRegistry -> FlagRegistry
+reset :: Flag -> FlagRegister -> FlagRegister
 reset f = flip clearBit $ flagNum f
 
-setIf :: Flag -> Bool -> FlagRegistry -> FlagRegistry
+setIf :: Flag -> Bool -> FlagRegister -> FlagRegister
 setIf f p = if p then set f else reset f
 
 ----------------------------------------------------------
 --ALU operations
 --
 -- add w1 w2 and carry flag
-adc8 :: FlagRegistry -> Word8 -> Word8 -> ALU Word8
+adc8 :: FlagRegister -> Word8 -> Word8 -> ALU Word8
 adc8 flags w1 w2 = Result result flags'
     where
         result = w1 + w2 + (fromBool (testFlag Cf flags))
@@ -105,10 +105,10 @@ add8 :: Word8 -> Word8 -> ALU Word8
 add8 = adc8 0
 
 -- attenzione non deve toccare il carry
-inc8 :: FlagRegistry -> Word8 -> ALU Word8
+inc8 :: FlagRegister -> Word8 -> ALU Word8
 inc8 flags = (\(Result r f) -> Result r (setIf Cf (testFlag Cf flags) f)) . (add8 1)
 
-sbc8 :: FlagRegistry -> Word8 -> Word8 -> ALU Word8
+sbc8 :: FlagRegister -> Word8 -> Word8 -> ALU Word8
 sbc8 flags w1 w2 = Result result flags'
     where
         result = w1 - w2 - (fromBool (testFlag Cf flags))
@@ -126,7 +126,7 @@ sub8 :: Word8 -> Word8 -> ALU Word8
 sub8 = sbc8 0
 
 -- attenzione non deve toccare il carry
-dec8 :: FlagRegistry -> Word8 -> ALU Word8
+dec8 :: FlagRegister -> Word8 -> ALU Word8
 dec8 flags = (\(Result r f) -> Result r (setIf Cf (testFlag Cf flags) f)) . (flip sub8 1)
 
 and8 :: Word8 -> Word8 -> ALU Word8
